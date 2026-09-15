@@ -1,19 +1,15 @@
-"""In-memory FAISS index used to retrieve the most relevant reference-policy
-segments for each contract clause.
+"""Lightweight reference-policy retrieval.
 
-The index is built fresh per review request (reference policies are small
-enough that this is fast and avoids any persistence/staleness concerns). This
-keeps the implementation simple, matching the project's "keep it simple"
-requirement while still using FAISS + Sentence-Transformers as specified.
+Uses simple word-overlap similarity instead of FAISS and
+Sentence-Transformers so the application can run on low-memory servers.
 """
+
 from dataclasses import dataclass
 from typing import List
+import re
 
-import faiss
-import numpy as np
 
 from app.services.chunking import TextSegment
-from app.services.embeddings import embed_texts
 
 
 @dataclass
@@ -22,32 +18,62 @@ class RetrievalHit:
     score: float
 
 
+def _tokenize(text: str) -> set[str]:
+    return set(re.findall(r"\b[a-zA-Z0-9]+\b", text.lower()))
+
+
+def _similarity(query: str, text: str) -> float:
+    query_words = _tokenize(query)
+    text_words = _tokenize(text)
+
+    if not query_words or not text_words:
+        return 0.0
+
+    intersection = query_words.intersection(text_words)
+
+    return len(intersection) / len(query_words)
+
+
 class ReferenceVectorStore:
-    """Wraps a FAISS flat inner-product index over reference-policy segments."""
+    """Lightweight replacement for the FAISS vector store."""
 
     def __init__(self, segments: List[TextSegment]):
         self.segments = segments
-        self._embeddings = embed_texts([s.text for s in segments])
-        dim = self._embeddings.shape[1] if self._embeddings.size else 384
-        self.index = faiss.IndexFlatIP(dim)
-        if self._embeddings.shape[0] > 0:
-            self.index.add(self._embeddings)
 
-    def search(self, query_text: str, top_k: int = 3) -> List[RetrievalHit]:
+    def search(
+        self,
+        query_text: str,
+        top_k: int = 3
+    ) -> List[RetrievalHit]:
+
         if not self.segments:
             return []
-        query_vec = embed_texts([query_text])
-        k = min(top_k, len(self.segments))
-        scores, indices = self.index.search(query_vec, k)
-        hits: List[RetrievalHit] = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx == -1:
-                continue
-            hits.append(RetrievalHit(segment=self.segments[int(idx)], score=float(score)))
-        return hits
 
-    def search_by_category(self, category: str, top_k: int = 3) -> List[RetrievalHit]:
-        """Convenience wrapper: use the category name itself as a query, useful
-        for detecting reference requirements that have no matching contract
-        clause at all (missing-clause detection)."""
+        scored = []
+
+        for segment in self.segments:
+            score = _similarity(query_text, segment.text)
+
+            if score > 0:
+                scored.append(
+                    RetrievalHit(
+                        segment=segment,
+                        score=float(score)
+                    )
+                )
+
+        scored.sort(
+            key=lambda hit: hit.score,
+            reverse=True
+        )
+
+        return scored[:top_k]
+
+    def search_by_category(
+        self,
+        category: str,
+        top_k: int = 3
+    ) -> List[RetrievalHit]:
+        """Retrieve reference clauses related to a category."""
+
         return self.search(category, top_k=top_k)

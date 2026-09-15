@@ -1,24 +1,23 @@
-"""Thin wrapper around Sentence-Transformers so the model is loaded once."""
-from functools import lru_cache
+"""Lightweight text matching utilities.
+
+This implementation avoids loading a machine-learning embedding model,
+which keeps memory usage low during deployment.
+"""
+
+import re
 from typing import List
 
-import numpy as np
-from sentence_transformers import SentenceTransformer
 
-from app.config import get_settings
-
-settings = get_settings()
+def tokenize(text: str) -> set[str]:
+    """Convert text into a set of lowercase words."""
+    return set(re.findall(r"\b[a-zA-Z0-9]+\b", text.lower()))
 
 
-@lru_cache
-def _get_model() -> SentenceTransformer:
-    return SentenceTransformer(settings.embedding_model)
+def embed_texts(texts: List[str]):
+    """
+    Lightweight replacement for SentenceTransformer embeddings.
 
-
-def embed_texts(texts: List[str]) -> np.ndarray:
-    """Return an (N, D) float32 array of L2-normalized embeddings."""
-    if not texts:
-        return np.zeros((0, 384), dtype="float32")
-    model = _get_model()
-    embeddings = model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
-    return embeddings.astype("float32")
+    Kept for compatibility with existing code.
+    Actual retrieval is handled by word-overlap matching.
+    """
+    return texts
